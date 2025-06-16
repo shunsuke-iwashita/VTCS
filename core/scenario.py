@@ -12,13 +12,13 @@ class Scenario(Play):
         self.v_frame_series = []          # 各フレームのv_frame（可視化や平滑化計算用）
         # 必要に応じて他の評価値・特徴量もここで
 
-    def calc_v_scenario(self, method='max15avg'):
+    def calc_v_scenario(self, smooth_window=15):
         """各フレームのv_frame系列から代表値を算出（例: 15フレーム平滑化＋最大値）"""
         v_frames = [f.v_frame.get(self.get_selected_id(f), 0.0) for f in self.frames]
         self.v_frame_series = v_frames
         # 例: 15フレーム平滑化
         import numpy as np
-        smoothed = np.convolve(v_frames, np.ones(15), 'same') / 15
+        smoothed = np.convolve(v_frames, np.ones(15), 'same') / smooth_window
         self.v_scenario = float(np.max(smoothed))
 
     def get_selected_id(self, frame):
