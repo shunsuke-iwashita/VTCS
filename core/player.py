@@ -1,13 +1,7 @@
 class Player:
-    def __init__(self, id):
+    def __init__(self, id, frames=None):
         self.id = id
-        self.states = {}  # frame番号: 特徴量dict
+        self.frames = frames or []  # [Frame, ...]
 
-    def as_dataframe(self):
-        import pandas as pd
-        return pd.DataFrame([
-            {'frame': f, **state} for f, state in self.states.items()
-        ])
-
-    def add_state(self, frame, state_dict):
-        self.states[frame] = state_dict
+    def add_frame(self, frame):
+        self.frames.append(frame)
