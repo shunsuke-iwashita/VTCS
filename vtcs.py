@@ -1,5 +1,8 @@
+import itertools
+
 import numpy as np
 import pandas as pd
+
 
 class VTCS:
     def __init__(self, ultimate_track_df):
@@ -165,6 +168,7 @@ class VTCS:
             return group
 
         self.play = self.play.groupby('id', group_keys=False).apply(update_selected_and_length)
+        self.play.drop(columns='length', inplace=True)
 
         # ---------- backward expansion ----------
         self.play.set_index(['id', 'frame'], inplace=True)
@@ -188,8 +192,60 @@ class VTCS:
         self.play.reset_index(inplace=True)
 
     def deselect_movement_initiation(self):
-        # Based on proximity
-        pass
+        """Deselect candidates based on proximity and running direction."""
+
+        def is_within_forward_direction(target_direction, target_x, target_y, other_x, other_y):
+            """Return True if another player is within the forward field of view."""
+            angle = np.arctan2(other_y - target_y, other_x - target_x) * (180 / np.pi)
+            relative_angle = (angle - target_direction + 360) % 360
+            return 0 <= relative_angle <= 45 or 315 <= relative_angle < 360
+
+        def process_segment_with_direction(df, continuous_frames, obj_id, distance_threshold, player_threshold):
+            """Evaluate one segment of continuous frames for a specific player."""
+            last_frame = continuous_frames[-1]
+            last_frame_data = df[df['frame'] == last_frame]
+
+            for _, target_row in last_frame_data.iterrows():
+                if target_row['id'] == obj_id:
+                    count = 0
+                    direction_count = 0
+                    for _, other_row in last_frame_data.iterrows():
+                        if other_row['id'] != target_row['id'] and other_row['class'] == 'offense':
+                            distance = np.sqrt((target_row['x'] - other_row['x']) ** 2 + (target_row['y'] - other_row['y']) ** 2)
+                            if distance <= distance_threshold:
+                                count += 1
+                            if is_within_forward_direction(
+                                target_row['v_angle'],
+                                target_row['x'],
+                                target_row['y'],
+                                other_row['x'],
+                                other_row['y'],
+                            ):
+                                direction_count += 1
+
+                    if count >= player_threshold or direction_count >= 2:
+                        df.loc[(df['id'] == target_row['id']) & (df['frame'].isin(continuous_frames)), 'selected'] = False
+            return df
+
+        distance_threshold = 2.0
+        player_threshold = 3
+
+        for id_val in self.play['id'].unique():
+            selected_frames = self.play.loc[(self.play['id'] == id_val) & (self.play['selected'] == True), 'frame'].values
+            continuous_frames_list = [list(g) for _, g in itertools.groupby(selected_frames, key=lambda n, c=itertools.count(): n - next(c))]
+
+            if continuous_frames_list:
+                for continuous_frames in continuous_frames_list:
+                    self.play = process_segment_with_direction(
+                        self.play,
+                        continuous_frames,
+                        id_val,
+                        distance_threshold,
+                        player_threshold,
+                    )
+
+        pd.set_option('display.max_rows', None)
+        print(self.play[self.play['id'] == 3])
 
 
 def main():
