@@ -78,122 +78,114 @@ class VTCS:
         """
         動き出しの検出を行い、play DataFrameを更新。
         """
-        # Initialize the 'selected' column to False
+        # ---------- detect movement initiation ----------
         self.play['selected'] = False
-
-        # Add 'prev_holder' column by shifting the 'holder' column by 30 frames for each id
         self.play['prev_holder'] = self.play.groupby('id')['holder'].shift(30)
-
+        angle_diff = np.abs((self.play['v_angle'] - self.play['a_angle'] + 180) % 360 - 180)
         # Define the selection criteria
         selection_criteria = (
-            # The current frame must be at least 15
             (self.play['frame'] > 1) &
-            # The object must be of class 'offense'
             (self.play['class'] == 'offense') &
-            # The object should not be a holder
             (self.play['holder'] == False) &
-            # The object should not have been a holder 30 frames ago
             (self.play['prev_holder'] != True) &
-            # The object's acceleration magnitude must be greater than the threshold
             (self.play['a_mag'] > a_threshold) &
-            # The difference of the velocity angle and acceleration angle must be less than 90
-            (abs((self.play['v_angle'] - self.play['a_angle'] + 180) % 360 - 180) < 90)
+            (angle_diff< 90)
         )
-
-        # Apply the selection criteria
         self.play.loc[selection_criteria, 'selected'] = True
 
-        # Expansion of range of movement initiation forward
-        for id in self.play['id'].unique():
-            id_df = self.play[self.play['id'] == id]
-            # Save the series of velocity angles
-            v_angles = []
+        # ---------- forward expansion ----------
+        def circular_average(angles):
+            radians = np.deg2rad(angles)
+            sin_average = np.mean(np.sin(radians))
+            cos_average = np.mean(np.cos(radians))
+            average_radian = np.arctan2(sin_average, cos_average)
+            average_angle = np.rad2deg(average_radian)
+            average_angle = average_angle % 360
+            return average_angle
 
-            for frame in range(1, id_df['frame'].max() + 1):
-                # Skip if the current frame is not selected
-                if not id_df.loc[id_df['frame'] == frame, 'selected'].values[0]:
-                    # Reset the velocity angle list
-                    v_angles = []
+        for id, id_df in self.play.groupby('id'):
+            id_df = id_df.sort_values('frame').reset_index()
+            frames = id_df['frame'].values
+            v_angles = id_df['v_angle'].values
+            selected = id_df['selected'].values
+            diff_v_angle = id_df['diff_v_angle'].values
+            v_mag = id_df['v_mag'].values
+            holder = id_df['holder'].values
+
+            v_angle_history = []
+            for i in range(len(frames)):
+                frame = frames[i]
+                if not selected[i]:
+                    v_angle_history = []
                     continue
-                v_angles.append(id_df.loc[id_df['frame'] == frame, 'v_angle'].values[0])
-                next_frame = frame + 1
-                next_frame_df = id_df[id_df['frame'] == next_frame]
+                v_angle_history.append(v_angles[i])
 
-                # Check if the next frame exists
-                if next_frame_df.empty:
+                next_idx = np.where(frames == frame + 1)[0]
+                if len(next_idx) == 0:
                     continue
+                ni = next_idx[0]
 
-                def circular_average(angles):
-                    # Convert angles to radians
-                    radians = np.deg2rad(angles)
-                    # Calculate the average of the sine and cosine values
-                    sin_average = np.mean(np.sin(radians))
-                    cos_average = np.mean(np.cos(radians))
-                    # Compute the average angle in radians
-                    average_radian = np.arctan2(sin_average, cos_average)
-                    # Convert back to degrees
-                    average_angle = np.rad2deg(average_radian)
-                    # Normalize the angle to be within [0, 360)
-                    average_angle = average_angle % 360
-                    return average_angle
-
-                # Calculate the angle difference
-                angle_diff = abs((next_frame_df['v_angle'].values[0] - circular_average(v_angles)))
-                # Ensure the angle difference is within the range [0, 180]
+                angle_diff = abs((v_angles[ni] - circular_average(v_angle_history)))
                 angle_diff = min(angle_diff, 360 - angle_diff)
 
-                # Check if the next frame meets the criteria
-                if (
-                    # The difference in velocity angle must be <= 20
-                    next_frame_df['diff_v_angle'].values[0] <= 20 and
-                    # The velocity magnitude must be > 3
-                    next_frame_df['v_mag'].values[0] > v_threshold and
-                    # The object should not be a holder
-                    next_frame_df['holder'].values[0] == False and
-                    # The object's velocity angle must be within the circular median of the previous angles
-                    angle_diff <= 90
-                ):
-                    # Mark the next frame as selected
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == next_frame), 'selected'] = True
-                    id_df.loc[id_df['frame'] == next_frame, 'selected'] = True
-                else:
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == next_frame), 'selected'] = False
-                    id_df.loc[id_df['frame'] == next_frame, 'selected'] = False
+                # Condition for selecting the next frame
+                cond = (
+                    (diff_v_angle[ni] <= 20) and
+                    (v_mag[ni] > v_threshold) and
+                    (not holder[ni]) and
+                    (angle_diff <= 90)
+                )
+                selected[ni] = cond
 
+            self.play.loc[id_df['index'], 'selected'] = selected
+
+        # ---------- deselect candidates based on length ----------
         def update_selected_and_length(group):
             group = group.sort_values('frame').reset_index(drop=True)
-            group['length'] = 0
-            start = 0
-            while start < len(group):
-                if group.loc[start, 'selected']:
-                    end = start
-                    while end + 1 < len(group) and group.loc[end + 1, 'selected'] and group.loc[end + 1, 'frame'] == group.loc[end, 'frame'] + 1:
-                        end += 1
-                    seq_length = end - start + 1
-                    group.loc[start:end, 'length'] = seq_length
-                    start = end + 1
-                else:
-                    start += 1
+            selected = group['selected'].values
+            frames = group['frame'].values
+
+            diff = np.diff(selected.astype(int), prepend=0)
+            starts = np.where((diff == 1))[0]
+            ends = np.where((diff == -1))[0] - 1
+
+            if selected[-1]:
+                if len(ends) < len(starts):
+                    ends = np.append(ends, len(selected) - 1)
+
+            length = np.zeros(len(selected), dtype=int)
+            for s, e in zip(starts, ends):
+                idx = np.arange(s, e + 1)
+                if np.all(np.diff(frames[idx]) == 1):
+                    seq_length = e - s + 1
+                    length[idx] = seq_length
+
+            group['length'] = length
             group.loc[(group['length'] < 15) | (group['length'] > 75), 'selected'] = False
             return group
 
-        # Deselect the movement initiation candidates based on length
         self.play = self.play.groupby('id', group_keys=False).apply(update_selected_and_length)
 
-        # Expansion of range of movement initiation backward
-        for frame in range(max(self.play['frame']), 0, -1):
-            selected_rows = self.play[(self.play['frame'] == frame) & (self.play['selected'])]
-            if selected_rows.empty:
-                continue
-            for id in selected_rows['id'].unique():
-                if (
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'selected'].values[0] == False and
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'v_mag'].values[0] > 0.05 and
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'v_mag'].values[0] - self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame), 'v_mag'].values[0] < 0.05
-                ):
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'selected'] = True
-        pd.set_option('display.max_rows', None)  # Show all rows in the DataFrame
-        print(self.play[self.play['id'] == 3])
+        # ---------- backward expansion ----------
+        self.play.set_index(['id', 'frame'], inplace=True)
+
+        max_frame = self.play.index.get_level_values('frame').max()
+        min_frame = self.play.index.get_level_values('frame').min()
+
+        for frame in range(max_frame, min_frame, -1):
+            selected_idx = self.play.index[self.play['selected'] & (self.play.index.get_level_values('frame') == frame)]
+            for idx in selected_idx:
+                id = idx[0]
+                prev_idx = (id, frame - 1)
+                if prev_idx in self.play.index:
+                    if (
+                        not self.play.at[prev_idx, 'selected'] and
+                        self.play.at[prev_idx, 'v_mag'] > 0.05 and
+                        self.play.at[prev_idx, 'v_mag'] - self.play.at[idx, 'v_mag'] < 0.05
+                    ):
+                        self.play.at[prev_idx, 'selected'] = True
+
+        self.play.reset_index(inplace=True)
 
     def deselect_movement_initiation(self):
         # Based on proximity
