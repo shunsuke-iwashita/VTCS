@@ -3,11 +3,13 @@ import itertools
 import numpy as np
 import pandas as pd
 
+import VTCS_visualize as vis
+
 
 class VTCS:
     def __init__(self, ultimate_track_df):
         self.play = ultimate_track_df
-        self.candidates = []   # list: DataFrame
+        self.candidates = {}   # dict: {id: DataFrame}
         self.selected = None   # DataFrame
         self.scenarios = {}    # dict: {shift: DataFrame of scenario}
 
@@ -34,7 +36,6 @@ class VTCS:
         self.detect_movement_initiation()  # 例: play DataFrameを更新する関数
         self.deselect_movement_initiation()  # 検出された動き出しを除外する関数
         self.extract_movement_candidates()  # 例: [df1, df2, ...]
-        return self.candidates
 
     def select_candidate(self, candidate_idx):
         """
@@ -168,7 +169,6 @@ class VTCS:
             return group
 
         self.play = self.play.groupby('id', group_keys=False).apply(update_selected_and_length)
-        self.play.drop(columns='length', inplace=True)
 
         # ---------- backward expansion ----------
         self.play.set_index(['id', 'frame'], inplace=True)
@@ -190,6 +190,7 @@ class VTCS:
                         self.play.at[prev_idx, 'selected'] = True
 
         self.play.reset_index(inplace=True)
+        self.play.drop(columns=['ax', 'ay', 'v_mag', 'a_mag', 'a_angle', 'diff_v_angle', 'prev_holder', 'length'], inplace=True)
 
     def deselect_movement_initiation(self):
         """Deselect candidates based on proximity and running direction."""
@@ -236,6 +237,9 @@ class VTCS:
                     if count >= player_threshold or direction_count >= 2:
                         self.play.loc[(self.play['id'] == id_val) & (self.play['frame'].isin(continuous_frames)), 'selected'] = False
 
+        self.play['v_angle'] = self.play['v_angle'].round(2)
+
+
     def extract_movement_candidates(self, window=30):
         """
         全選手分のデータを、selected==Trueの連続区間ごとに
@@ -250,17 +254,19 @@ class VTCS:
                 continue
             # 連続区間ごとにグループ化
             groups = [list(g) for _, g in itertools.groupby(selected_frames, key=lambda n, c=itertools.count(): n - next(c))]
-            for frames in groups:
+            for i, frames in enumerate(groups):
                 # 前後window分のフレーム範囲を決定
                 start_frame = max(min(frames) - window, play['frame'].min())
                 end_frame = min(max(frames) + window, play['frame'].max())
                 # この区間に含まれる全選手のデータを抽出
                 candidate_df = play[(play['frame'] >= start_frame) & (play['frame'] <= end_frame)].copy()
+                candidate_df.loc[~candidate_df['frame'].isin(frames), 'selected'] = False  # 選択されていないフレームはselected=Falseにする
+                candidate_df.loc[candidate_df['id'] != player_id, 'selected'] = False  # 対象選手以外のデータはselected=Falseにする
                 # 追加情報（例えば対象プレイヤーIDや動き出し開始フレームなど）も入れておくと便利
                 candidate_df.attrs['movement_player_id'] = player_id
                 candidate_df.attrs['movement_start_frame'] = min(frames)
                 candidate_df.attrs['movement_end_frame'] = max(frames)
-                self.candidates.append(candidate_df)
+                self.candidates[f'{player_id}-{i+1}'] = candidate_df
 
 
 def main():
@@ -269,8 +275,6 @@ def main():
     vtcs = VTCS(ultimate_track_df)
 
     vtcs.detect_candidates()
-    print("Candidates detected:", vtcs.candidates)
-    print(len(vtcs.candidates))
 
     if vtcs.candidates:
         vtcs.select_candidate(0)  # Select the first candidate
