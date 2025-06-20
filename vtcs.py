@@ -75,124 +75,104 @@ class VTCS:
         }
 
     def detect_movement_initiation(self, v_threshold=3.0, a_threshold=4.0):
-        """
-        動き出しの検出を行い、play DataFrameを更新。
-        """
-        # Initialize the 'selected' column to False
+        """Detect movement initiation and update ``self.play``."""
+
+        # initialise selection flag
         self.play['selected'] = False
 
-        # Add 'prev_holder' column by shifting the 'holder' column by 30 frames for each id
+        # previous possession state
         self.play['prev_holder'] = self.play.groupby('id')['holder'].shift(30)
 
-        # Define the selection criteria
-        selection_criteria = (
-            # The current frame must be at least 15
+        # base conditions for the first frame of a candidate sequence
+        criteria = (
             (self.play['frame'] > 1) &
-            # The object must be of class 'offense'
             (self.play['class'] == 'offense') &
-            # The object should not be a holder
-            (self.play['holder'] == False) &
-            # The object should not have been a holder 30 frames ago
+            (~self.play['holder']) &
             (self.play['prev_holder'] != True) &
-            # The object's acceleration magnitude must be greater than the threshold
             (self.play['a_mag'] > a_threshold) &
-            # The difference of the velocity angle and acceleration angle must be less than 90
             (abs((self.play['v_angle'] - self.play['a_angle'] + 180) % 360 - 180) < 90)
         )
+        self.play.loc[criteria, 'selected'] = True
 
-        # Apply the selection criteria
-        self.play.loc[selection_criteria, 'selected'] = True
+        # ---------- forward expansion per id ----------
+        for pid, grp in self.play.groupby('id'):
+            grp = grp.sort_values('frame')
+            idx = grp.index
+            selected = grp['selected'].to_numpy()
 
-        # Expansion of range of movement initiation forward
-        for id in self.play['id'].unique():
-            id_df = self.play[self.play['id'] == id]
-            # Save the series of velocity angles
-            v_angles = []
+            v_angles = np.deg2rad(grp['v_angle'].to_numpy())
+            diff_v = grp['diff_v_angle'].to_numpy()
+            v_mag = grp['v_mag'].to_numpy()
+            holder = grp['holder'].to_numpy()
 
-            for frame in range(1, id_df['frame'].max() + 1):
-                # Skip if the current frame is not selected
-                if not id_df.loc[id_df['frame'] == frame, 'selected'].values[0]:
-                    # Reset the velocity angle list
-                    v_angles = []
-                    continue
-                v_angles.append(id_df.loc[id_df['frame'] == frame, 'v_angle'].values[0])
-                next_frame = frame + 1
-                next_frame_df = id_df[id_df['frame'] == next_frame]
+            sin_sum = 0.0
+            cos_sum = 0.0
+            count = 0
 
-                # Check if the next frame exists
-                if next_frame_df.empty:
-                    continue
+            for i in range(len(grp) - 1):
+                if selected[i]:
+                    sin_sum += np.sin(v_angles[i])
+                    cos_sum += np.cos(v_angles[i])
+                    count += 1
 
-                def circular_average(angles):
-                    # Convert angles to radians
-                    radians = np.deg2rad(angles)
-                    # Calculate the average of the sine and cosine values
-                    sin_average = np.mean(np.sin(radians))
-                    cos_average = np.mean(np.cos(radians))
-                    # Compute the average angle in radians
-                    average_radian = np.arctan2(sin_average, cos_average)
-                    # Convert back to degrees
-                    average_angle = np.rad2deg(average_radian)
-                    # Normalize the angle to be within [0, 360)
-                    average_angle = average_angle % 360
-                    return average_angle
+                    j = i + 1
+                    mean_angle = np.arctan2(sin_sum / count, cos_sum / count)
+                    ang_diff = abs(np.rad2deg(np.arctan2(np.sin(v_angles[j] - mean_angle),
+                                                        np.cos(v_angles[j] - mean_angle))))
 
-                # Calculate the angle difference
-                angle_diff = abs((next_frame_df['v_angle'].values[0] - circular_average(v_angles)))
-                # Ensure the angle difference is within the range [0, 180]
-                angle_diff = min(angle_diff, 360 - angle_diff)
-
-                # Check if the next frame meets the criteria
-                if (
-                    # The difference in velocity angle must be <= 20
-                    next_frame_df['diff_v_angle'].values[0] <= 20 and
-                    # The velocity magnitude must be > 3
-                    next_frame_df['v_mag'].values[0] > v_threshold and
-                    # The object should not be a holder
-                    next_frame_df['holder'].values[0] == False and
-                    # The object's velocity angle must be within the circular median of the previous angles
-                    angle_diff <= 90
-                ):
-                    # Mark the next frame as selected
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == next_frame), 'selected'] = True
-                    id_df.loc[id_df['frame'] == next_frame, 'selected'] = True
+                    if (diff_v[j] <= 20 and v_mag[j] > v_threshold and not holder[j] and ang_diff <= 90):
+                        selected[j] = True
+                    else:
+                        sin_sum = 0.0
+                        cos_sum = 0.0
+                        count = 0
                 else:
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == next_frame), 'selected'] = False
-                    id_df.loc[id_df['frame'] == next_frame, 'selected'] = False
+                    sin_sum = 0.0
+                    cos_sum = 0.0
+                    count = 0
 
-        def update_selected_and_length(group):
-            group = group.sort_values('frame').reset_index(drop=True)
-            group['length'] = 0
-            start = 0
-            while start < len(group):
-                if group.loc[start, 'selected']:
-                    end = start
-                    while end + 1 < len(group) and group.loc[end + 1, 'selected'] and group.loc[end + 1, 'frame'] == group.loc[end, 'frame'] + 1:
-                        end += 1
-                    seq_length = end - start + 1
-                    group.loc[start:end, 'length'] = seq_length
-                    start = end + 1
+            self.play.loc[idx, 'selected'] = pd.Series(selected, index=idx)
+
+        # ---------- remove too short/long sequences ----------
+        def _set_seq_length(df: pd.DataFrame) -> pd.DataFrame:
+            df = df.sort_values('frame').reset_index(drop=True)
+            sel = df['selected'].to_numpy()
+            frames = df['frame'].to_numpy()
+            length = np.zeros_like(sel, dtype=int)
+
+            i = 0
+            while i < len(sel):
+                if sel[i]:
+                    j = i
+                    while j + 1 < len(sel) and sel[j + 1] and frames[j + 1] == frames[j] + 1:
+                        j += 1
+                    seq_len = j - i + 1
+                    length[i:j + 1] = seq_len
+                    i = j + 1
                 else:
-                    start += 1
-            group.loc[(group['length'] < 15) | (group['length'] > 75), 'selected'] = False
-            return group
+                    i += 1
 
-        # Deselect the movement initiation candidates based on length
-        self.play = self.play.groupby('id', group_keys=False).apply(update_selected_and_length)
+            df['length'] = length
+            df.loc[(df['length'] < 15) | (df['length'] > 75), 'selected'] = False
+            return df
 
-        # Expansion of range of movement initiation backward
-        for frame in range(max(self.play['frame']), 0, -1):
-            selected_rows = self.play[(self.play['frame'] == frame) & (self.play['selected'])]
-            if selected_rows.empty:
-                continue
-            for id in selected_rows['id'].unique():
-                if (
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'selected'].values[0] == False and
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'v_mag'].values[0] > 0.05 and
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'v_mag'].values[0] - self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame), 'v_mag'].values[0] < 0.05
-                ):
-                    self.play.loc[(self.play['id'] == id) & (self.play['frame'] == frame - 1), 'selected'] = True
-        pd.set_option('display.max_rows', None)  # Show all rows in the DataFrame
+        self.play = self.play.groupby('id', group_keys=False).apply(_set_seq_length)
+
+        # ---------- backward expansion ----------
+        self.play.sort_values(['id', 'frame'], inplace=True)
+        for pid, grp in self.play.groupby('id'):
+            idx = grp.index
+            sel = grp['selected'].to_numpy()
+            v_mag = grp['v_mag'].to_numpy()
+
+            for i in range(len(grp) - 1, 0, -1):
+                if sel[i] and not sel[i - 1]:
+                    if v_mag[i - 1] > 0.05 and (v_mag[i - 1] - v_mag[i] < 0.05):
+                        sel[i - 1] = True
+
+            self.play.loc[idx, 'selected'] = pd.Series(sel, index=idx)
+
+        pd.set_option('display.max_rows', None)
         print(self.play[self.play['id'] == 3])
 
     def deselect_movement_initiation(self):
