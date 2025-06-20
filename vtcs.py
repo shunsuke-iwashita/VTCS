@@ -194,55 +194,47 @@ class VTCS:
     def deselect_movement_initiation(self):
         """Deselect candidates based on proximity and running direction."""
 
-        def is_within_forward_direction(target_direction, target_x, target_y, other_x, other_y):
-            """Return True if another player is within the forward field of view."""
-            angle = np.arctan2(other_y - target_y, other_x - target_x) * (180 / np.pi)
+        def is_within_forward_direction(target_direction, dx, dy):
+            angle = np.degrees(np.arctan2(dy, dx))
             relative_angle = (angle - target_direction + 360) % 360
-            return 0 <= relative_angle <= 45 or 315 <= relative_angle < 360
+            return (0 <= relative_angle) & (relative_angle <= 45) | (315 <= relative_angle) & (relative_angle < 360)
 
-        def process_segment_with_direction(df, continuous_frames, obj_id, distance_threshold, player_threshold):
-            """Evaluate one segment of continuous frames for a specific player."""
-            last_frame = continuous_frames[-1]
-            last_frame_data = df[df['frame'] == last_frame]
-
-            for _, target_row in last_frame_data.iterrows():
-                if target_row['id'] == obj_id:
-                    count = 0
-                    direction_count = 0
-                    for _, other_row in last_frame_data.iterrows():
-                        if other_row['id'] != target_row['id'] and other_row['class'] == 'offense':
-                            distance = np.sqrt((target_row['x'] - other_row['x']) ** 2 + (target_row['y'] - other_row['y']) ** 2)
-                            if distance <= distance_threshold:
-                                count += 1
-                            if is_within_forward_direction(
-                                target_row['v_angle'],
-                                target_row['x'],
-                                target_row['y'],
-                                other_row['x'],
-                                other_row['y'],
-                            ):
-                                direction_count += 1
-
-                    if count >= player_threshold or direction_count >= 2:
-                        df.loc[(df['id'] == target_row['id']) & (df['frame'].isin(continuous_frames)), 'selected'] = False
-            return df
-
-        distance_threshold = 2.0
-        player_threshold = 3
+        distance_threshold = 5.0
+        player_threshold = 2
 
         for id_val in self.play['id'].unique():
-            selected_frames = self.play.loc[(self.play['id'] == id_val) & (self.play['selected'] == True), 'frame'].values
+            selected_frames = self.play.loc[(self.play['id'] == id_val) & (self.play['selected']), 'frame'].values
             continuous_frames_list = [list(g) for _, g in itertools.groupby(selected_frames, key=lambda n, c=itertools.count(): n - next(c))]
 
             if continuous_frames_list:
                 for continuous_frames in continuous_frames_list:
-                    self.play = process_segment_with_direction(
-                        self.play,
-                        continuous_frames,
-                        id_val,
-                        distance_threshold,
-                        player_threshold,
-                    )
+                    last_frame = continuous_frames[-1]
+                    last_frame_data = self.play[self.play['frame'] == last_frame]
+
+                    # 対象プレイヤーのデータ
+                    target_row = last_frame_data[last_frame_data['id'] == id_val]
+                    if target_row.empty:
+                        continue
+                    tx, ty, tdir = target_row[['x', 'y', 'v_angle']].values[0]
+
+                    # 他のoffenseプレイヤーのデータ
+                    others = last_frame_data[(last_frame_data['id'] != id_val) & (last_frame_data['class'] == 'offense')]
+                    if others.empty:
+                        continue
+                    ox = others['x'].values
+                    oy = others['y'].values
+
+                    # 距離計算（ベクトル化）
+                    dx = ox - tx
+                    dy = oy - ty
+                    distances = np.hypot(dx, dy)
+                    count = np.sum(distances <= distance_threshold)
+
+                    # 進行方向内判定（ベクトル化）
+                    direction_count = np.sum(is_within_forward_direction(tdir, dx, dy))
+
+                    if count >= player_threshold or direction_count >= 2:
+                        self.play.loc[(self.play['id'] == id_val) & (self.play['frame'].isin(continuous_frames)), 'selected'] = False
 
         pd.set_option('display.max_rows', None)
         print(self.play[self.play['id'] == 3])
