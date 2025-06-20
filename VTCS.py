@@ -275,6 +275,8 @@ def main():
     vtcs = VTCS(ultimate_track_df)
 
     vtcs.detect_candidates()
+    for candidate_id, candidate_df in vtcs.candidates.items():
+        vis.plot_play(candidate_df, save_path=f"output/{candidate_id}")
 
     if vtcs.candidates:
         vtcs.select_candidate(0)  # Select the first candidate
