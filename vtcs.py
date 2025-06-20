@@ -33,7 +33,7 @@ class VTCS:
         # Detect movement initiation from the play DataFrame.
         self.detect_movement_initiation()  # 例: play DataFrameを更新する関数
         self.deselect_movement_initiation()  # 検出された動き出しを除外する関数
-        self.candidates = detect_movement_candidates(self.play)  # 例: [df1, df2, ...]
+        self.extract_movement_candidates()  # 例: [df1, df2, ...]
         return self.candidates
 
     def select_candidate(self, candidate_idx):
@@ -236,8 +236,31 @@ class VTCS:
                     if count >= player_threshold or direction_count >= 2:
                         self.play.loc[(self.play['id'] == id_val) & (self.play['frame'].isin(continuous_frames)), 'selected'] = False
 
-        pd.set_option('display.max_rows', None)
-        print(self.play[self.play['id'] == 3])
+    def extract_movement_candidates(self, window=30):
+        """
+        全選手分のデータを、selected==Trueの連続区間ごとに
+        「その区間＋前後windowフレーム」を含めて抽出し、リストで返す。
+        """
+        play = self.play
+        # 動き出しが選ばれた全選手・全区間を抽出
+        for player_id in play.loc[play['selected'] == True, 'id'].unique():
+            player_df = play[play['id'] == player_id]
+            selected_frames = player_df[player_df['selected'] == True]['frame'].values
+            if len(selected_frames) == 0:
+                continue
+            # 連続区間ごとにグループ化
+            groups = [list(g) for _, g in itertools.groupby(selected_frames, key=lambda n, c=itertools.count(): n - next(c))]
+            for frames in groups:
+                # 前後window分のフレーム範囲を決定
+                start_frame = max(min(frames) - window, play['frame'].min())
+                end_frame = min(max(frames) + window, play['frame'].max())
+                # この区間に含まれる全選手のデータを抽出
+                candidate_df = play[(play['frame'] >= start_frame) & (play['frame'] <= end_frame)].copy()
+                # 追加情報（例えば対象プレイヤーIDや動き出し開始フレームなど）も入れておくと便利
+                candidate_df.attrs['movement_player_id'] = player_id
+                candidate_df.attrs['movement_start_frame'] = min(frames)
+                candidate_df.attrs['movement_end_frame'] = max(frames)
+                self.candidates.append(candidate_df)
 
 
 def main():
@@ -247,6 +270,7 @@ def main():
 
     vtcs.detect_candidates()
     print("Candidates detected:", vtcs.candidates)
+    print(len(vtcs.candidates))
 
     if vtcs.candidates:
         vtcs.select_candidate(0)  # Select the first candidate
