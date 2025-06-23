@@ -246,27 +246,38 @@ class VTCS:
         「その区間＋前後windowフレーム」を含めて抽出し、リストで返す。
         """
         play = self.play
-        # 動き出しが選ばれた全選手・全区間を抽出
-        for player_id in play.loc[play['selected'] == True, 'id'].unique():
-            player_df = play[play['id'] == player_id]
-            selected_frames = player_df[player_df['selected'] == True]['frame'].values
-            if len(selected_frames) == 0:
+
+        # 選択された全選手・全フレームを抽出
+        selected = play[play['selected']]
+        # 連続区間を検出するため、各playerごとに処理
+        for player_id, group in selected.groupby('id'):
+            frames = group['frame'].sort_values().values
+            if len(frames) == 0:
                 continue
             # 連続区間ごとにグループ化
-            groups = [list(g) for _, g in itertools.groupby(selected_frames, key=lambda n, c=itertools.count(): n - next(c))]
-            for i, frames in enumerate(groups):
-                # 前後window分のフレーム範囲を決定
-                start_frame = max(min(frames) - window, play['frame'].min())
-                end_frame = min(max(frames) + window, play['frame'].max())
-                # この区間に含まれる全選手のデータを抽出
+            # 差分が1でないところでグループが切れる
+            split_idx = np.where(np.diff(frames) != 1)[0] + 1
+            frame_groups = np.split(frames, split_idx)
+            for i, frames_in_group in enumerate(frame_groups):
+                start_frame = max(frames_in_group.min() - window, play['frame'].min())
+                end_frame = min(frames_in_group.max() + window, play['frame'].max())
                 candidate_df = play[(play['frame'] >= start_frame) & (play['frame'] <= end_frame)].copy()
-                candidate_df.loc[~candidate_df['frame'].isin(frames), 'selected'] = False  # 選択されていないフレームはselected=Falseにする
-                candidate_df.loc[candidate_df['id'] != player_id, 'selected'] = False  # 対象選手以外のデータはselected=Falseにする
-                # 追加情報（例えば対象プレイヤーIDや動き出し開始フレームなど）も入れておくと便利
+                candidate_df['selected'] = False
+                candidate_df.loc[(candidate_df['id'] == player_id) & (candidate_df['frame'].isin(frames_in_group)), 'selected'] = True
                 candidate_df.attrs['movement_player_id'] = player_id
-                candidate_df.attrs['movement_start_frame'] = min(frames)
-                candidate_df.attrs['movement_end_frame'] = max(frames)
+                candidate_df.attrs['movement_start_frame'] = frames_in_group.min()
+                candidate_df.attrs['movement_end_frame'] = frames_in_group.max()
+                candidate_df['selected_def'] = False
+                # 同じフレームのグループ内で、selectedがTrueのclosestの値をidにもつデータのselected_defをTrueに変更する
+                for frame in frames_in_group:
+                    frame_df = candidate_df[candidate_df['frame'] == frame]
+                    selected_row = frame_df[frame_df['selected']]
+                    if not selected_row.empty:
+                        closest_id = selected_row['closest'].values[0]
+                        idx = candidate_df[(candidate_df['frame'] == frame) & (candidate_df['id'] == closest_id)].index
+                        candidate_df.loc[idx, 'selected_def'] = True
                 self.candidates[f'{player_id}-{i+1}'] = candidate_df
+
 
 
 def main():
