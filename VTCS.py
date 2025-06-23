@@ -1,4 +1,5 @@
 import itertools
+import sys
 
 import numpy as np
 import pandas as pd
@@ -14,9 +15,9 @@ class VTCS:
         self.scenarios = {}    # dict: {shift: DataFrame of scenario}
 
         # --- 評価指標（初期化時はNoneや空で持つ） ---
-        self.v_frame = None      # dict: {shift: list of values}
-        self.v_scenario = None   # dict: {shift: value}
-        self.v_timing = None     # float
+        self.v_frame = {}      # dict: {shift: list of values}
+        self.v_scenario = {}   # dict: {shift: value}
+        self.v_timing = None   # float
 
         # 必要なら
         self.optimal_shift = None
@@ -37,20 +38,19 @@ class VTCS:
         self.deselect_movement_initiation()  # 検出された動き出しを除外する関数
         self.extract_movement_candidates()  # 例: [df1, df2, ...]
 
-    def select_candidate(self, candidate_idx):
-        """
-        UI等からインデックスで候補を指定し、そのDataFrameをself.selectedにセット。
-        """
-        self.selected = self.candidates[candidate_idx]
-        self._generate_scenarios()
-
-    def _generate_scenarios(self, shifts=range(-15, 16)):
+    def generate_scenarios(self, shifts=range(-15, 16)):
         """
         選択した候補DataFrame(self.selected)から各シフトの反実仮想シナリオを生成し、dictで格納。
         """
-        self.scenarios = {}
+        self.fill_holder()
+
         for shift in shifts:
-            scenario_df = create_scenario_df(self.selected, shift)  # 例: DataFrame返す関数
+            if shift == 0:
+                scenario_df = self.selected.copy()
+            elif shift < 0:
+                scenario_df = self.shift_forward(shift)  # 例: DataFrameを前方にシフトする関数
+            elif shift > 0:
+                scenario_df = self.shift_backward(shift)  # 例: DataFrameを後方にシフトする関数
             self.scenarios[shift] = scenario_df
 
     def evaluate(self):
@@ -278,6 +278,41 @@ class VTCS:
                         candidate_df.loc[idx, 'selected_def'] = True
                 self.candidates[f'{player_id}-{i+1}'] = candidate_df
 
+    def fill_holder(self):
+        """
+        選択した候補DataFrameのholder列をTrueに設定する。
+        """
+        # frameごとのholder=Trueを管理
+        holder_id = None
+        for frame, group in self.selected.groupby('frame'):
+            holders = group[group['holder'] == True]
+            if len(holders) == 1:
+                # ちょうど1つ → そのidを記憶
+                holder_id = holders['id'].iloc[0]
+            elif len(holders) == 0:
+                # 0なら直近のholder_idを使う
+                if holder_id is not None:
+                    mask = (self.selected['frame'] == frame) & (self.selected['id'] == holder_id)
+                    self.selected.loc[mask, 'holder'] = True
+                    mask_ = (self.selected['frame'] == frame) & (self.selected['class'] == 'disc')
+                    self.selected.loc[mask_, ['x', 'y']] = self.selected.loc[mask, ['x', 'y']].values
+
+        pd.set_option('display.max_rows', None)
+        print(self.selected[self.selected['class'] == 'disc'])
+        print(self.selected[self.selected['holder'] == True])
+
+    def shift_forward(self, shift):
+        """
+        選択した候補DataFrameを前方にシフトする。
+        """
+        return
+
+    def shift_backward(self, shift):
+        """
+        選択した候補DataFrameを後方にシフトする。
+        """
+        return
+
 
 
 def main():
@@ -290,14 +325,22 @@ def main():
         vis.plot_play(candidate_df, save_path=f"output/{candidate_id}")
 
     if vtcs.candidates:
-        vtcs.select_candidate(0)  # Select the first candidate
-        print("Selected candidate:", vtcs.selected)
+        # select a candidate
+        while True:
+            candidate_index = input("Enter candidate index to select (e.g., '1-1'): ")
+            if candidate_index == "q":
+                print("Exiting.")
+                sys.exit(0)
+            if candidate_index in vtcs.candidates:
+                vtcs.selected = vtcs.candidates[candidate_index]
+                print("Selected candidate:", vtcs.selected.attrs['movement_player_id'], "from frame", vtcs.selected.attrs['movement_start_frame'], "to", vtcs.selected.attrs['movement_end_frame'])
+                break
+            else:
+                print("Invalid candidate index. Please try again.")
 
-        vtcs._generate_scenarios()
-        print("Generated scenarios:", vtcs.scenarios)
+        vtcs.generate_scenarios()
 
         evaluation_results = vtcs.evaluate()
-        print("Evaluation results:", evaluation_results)
 
 if __name__ == "__main__":
     main()
