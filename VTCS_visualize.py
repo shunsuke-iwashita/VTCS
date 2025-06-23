@@ -89,10 +89,10 @@ def plot_play(play_data, save_path, fps=15, field_dimen=(47.0, 18.5)):
 
                 alpha = 0.7
                 if row['class'] == 'offense':
-                    color = 'dodgerblue'
+                    color = 'blue' if row['selected'] else 'dodgerblue'
                     size = 10
                 elif row['class'] == 'defense':
-                    color = 'indianred'
+                    color = 'red' if row['selected_def'] else 'indianred'
                     size = 10
                 elif row['class'] == 'disc':
                     color = 'black'
@@ -118,7 +118,7 @@ def plot_play(play_data, save_path, fps=15, field_dimen=(47.0, 18.5)):
 
                 text_objs[pid].set_position((x, y))
                 text_objs[pid].set_text(str(pid) if row['class'] != 'disc' else '')
-                text_objs[pid].set_color('white' if color in ['dodgerblue', 'indianred'] else 'black')
+                text_objs[pid].set_color('black' if color == 'blace' else 'white')
                 text_objs[pid].set_fontsize(7)
 
             writer.grab_frame()
