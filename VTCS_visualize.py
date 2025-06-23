@@ -5,7 +5,7 @@ import numpy as np
 
 def plot_pitch(field_dimen=(47.0, 18.5), linewidth=2):
     """Draw a simple ultimate field."""
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 6))
     border_dimen = (3, 3)
     half_pitch_length = field_dimen[0] / 2.0
     half_pitch_width = field_dimen[1] / 2.0
@@ -30,6 +30,7 @@ def plot_pitch(field_dimen=(47.0, 18.5), linewidth=2):
     ax.set_ylim([-half_pitch_width - border_dimen[1],
                  half_pitch_width + border_dimen[1]])
     ax.set_axisbelow(True)
+    ax.set_aspect('equal', adjustable='box')
     return fig, ax
 
 
