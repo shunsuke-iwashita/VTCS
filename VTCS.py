@@ -53,6 +53,8 @@ class VTCS:
                 scenario_df = self.shift_backward(shift)  # 例: DataFrameを後方にシフトする関数
             self.scenarios[shift] = scenario_df
 
+        self.adjust_disc_positions()
+
     def evaluate(self):
         """
         各シナリオDataFrameごとにV_frame, V_scenarioを計算し、V_timingも算出。
@@ -297,23 +299,138 @@ class VTCS:
                     mask_ = (self.selected['frame'] == frame) & (self.selected['class'] == 'disc')
                     self.selected.loc[mask_, ['x', 'y']] = self.selected.loc[mask, ['x', 'y']].values
 
-        pd.set_option('display.max_rows', None)
-        print(self.selected[self.selected['class'] == 'disc'])
-        print(self.selected[self.selected['holder'] == True])
-
     def shift_forward(self, shift):
         """
         選択した候補DataFrameを前方にシフトする。
         """
-        return
+        assert shift < 0
+        df_shifted = self.selected.copy()
+        t0 = df_shifted[df_shifted['selected'] == True]['frame'].min()
+        max_frame = df_shifted['frame'].max()
+        new_t0 = t0 + shift
+        new_max_frame = max_frame + shift
+
+        if t0 - df_shifted['frame'].min() < abs(shift):
+            return None
+
+        for class_type in ['offense', 'defense']:
+            column = 'selected' if class_type == 'offense' else 'selected_def'
+
+            # Get the selected player id
+            selected_id = int(df_shifted[df_shifted[column] == True]['id'].values[0])
+
+            # Get the delta_x and delta_y
+            delta_x = df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] == new_t0)]['x'].values[0] - df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] == t0)]['x'].values[0]
+            delta_y = df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] == new_t0)]['y'].values[0] - df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] == t0)]['y'].values[0]
+
+            # Remove duplicate frames by shifting the frame
+            df_shifted = df_shifted[~((df_shifted['id'] == selected_id) & (df_shifted['frame'] >= new_t0) & (df_shifted['frame'] < t0))]
+
+            # Shift the frames
+            df_shifted.loc[(df_shifted['id'] == selected_id) & (df_shifted['frame'] >= t0), 'frame'] += shift
+
+            # Correct the x and y positions
+            df_shifted.loc[(df_shifted['id'] == selected_id) & (df_shifted['frame'] >= new_t0), 'x'] += delta_x
+            df_shifted.loc[(df_shifted['id'] == selected_id) & (df_shifted['frame'] >= new_t0), 'y'] += delta_y
+
+            # Get other feature
+            vx_mean = df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] > new_max_frame - 15)]['vx'].mean().round(2)
+            vy_mean = df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] > new_max_frame - 15)]['vy'].mean().round(2)
+            v_angle = np.degrees(np.arctan2(vy_mean, vx_mean)).round(2)
+
+            closest = df_shifted[df_shifted['id'] == selected_id]['closest'].values[0]
+
+            # Add missing frames by shifting the frame
+            columns = df_shifted.columns
+            for i in range(1, abs(shift) + 1):
+                x = (df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] == new_max_frame)]['x'].values[0] + vx_mean / 15 * i).round(2)
+                y = (df_shifted[(df_shifted['id'] == selected_id) & (df_shifted['frame'] == new_max_frame)]['y'].values[0] + vy_mean / 15 * i).round(2)
+
+                df_add = pd.DataFrame([[selected_id, new_max_frame + i, class_type, x, y, vx_mean, vy_mean, closest, False, v_angle, False, False]], columns=columns)
+
+                df_shifted = pd.concat([df_shifted, df_add])
+
+            df_shifted = df_shifted.sort_values(['frame', 'id']).reset_index(drop=True)
+
+        return df_shifted
+
 
     def shift_backward(self, shift):
         """
         選択した候補DataFrameを後方にシフトする。
         """
-        return
+        assert shift > 0
+        df = self.selected.copy()
+        player_id = int(df[df['selected']==True]['id'].values[0])
+        t0 = df[df['selected']==True]['frame'].min()
+        # v̄i: t0前15フレームの平均
+        pre_frames = df[(df['id'] == player_id) & (df['frame'] < t0) & (df['frame'] >= t0-15)]
+        vx_bar = pre_frames['vx'].mean()
+        vy_bar = pre_frames['vy'].mean()
 
+        # t0までオリジナル
+        df_shifted = df.copy()
+        mask_before = df_shifted['frame'] <= t0
+        mask_delay = (df_shifted['frame'] > t0) & (df_shifted['frame'] <= t0+shift)
+        mask_after = df_shifted['frame'] > t0+shift
 
+        # (2-1) t0 < t <= t0+shift 平均速度で直線補間
+        for t in range(t0+1, t0+shift+1):
+            idx = (df_shifted['frame'] == t) & (df_shifted['id'] == player_id)
+            df_shifted.loc[idx, 'x'] = df_shifted.loc[(df_shifted['frame'] == t0) & (df_shifted['id'] == player_id), 'x'].values[0] + vx_bar * (t - t0)
+            df_shifted.loc[idx, 'y'] = df_shifted.loc[(df_shifted['frame'] == t0) & (df_shifted['id'] == player_id), 'y'].values[0] + vy_bar * (t - t0)
+
+        # (2-2) t > t0+shift オリジナルの動き出し区間をshift遅らせて再生＋補正
+        delta_x = vx_bar * shift
+        delta_y = vy_bar * shift
+        for t in range(t0+shift+1, df_shifted['frame'].max()+1):
+            ref_t = t - shift
+            if (df_shifted['frame'] == ref_t).any():
+                idx = (df_shifted['frame'] == t) & (df_shifted['id'] == player_id)
+                df_shifted.loc[idx, 'x'] = df_shifted.loc[(df_shifted['frame'] == ref_t) & (df_shifted['id'] == player_id), 'x'].values[0] + delta_x
+                df_shifted.loc[idx, 'y'] = df_shifted.loc[(df_shifted['frame'] == ref_t) & (df_shifted['id'] == player_id), 'y'].values[0] + delta_y
+
+        # selectedフラグも後ろ倒し
+        selected_frames = df_shifted[df_shifted['selected'] == True]['frame'] + shift
+        df_shifted['selected'] = False
+        df_shifted.loc[df_shifted['frame'].isin(selected_frames) & (df_shifted['id'] == player_id), 'selected'] = True
+        return df_shifted
+
+    def adjust_disc_positions(self):
+        """
+        選択した候補DataFrameのディスク位置を調整する。
+        """
+        for shift, scenario_df in self.scenarios.items():
+            scenario_df = scenario_df.sort_values(by='frame', ascending=False).reset_index(drop=True)
+
+            temp = None
+            for frame, frame_data in scenario_df.groupby('frame'):
+                if len(frame_data[frame_data['holder'] == True]) == 1:
+                    temp = frame_data[frame_data['holder'] == True]['id'].values[0]
+                elif len(frame_data[frame_data['holder'] == True]) >= 2:
+                    scenario_df.loc[(scenario_df['frame'] == frame) & (scenario_df['holder'] == True), 'holder'] = False
+                    temp = frame_data[frame_data['holder'] == True]['id'].values[0]
+                else:
+                    scenario_df.loc[(scenario_df['frame'] == frame) & (scenario_df['id'] == temp), 'holder'] = True
+
+            scenario_df = scenario_df.sort_values(by=['frame', 'id']).reset_index(drop=True)
+
+            # Initialize the disc position
+            scenario_df.loc[(scenario_df['class'] == 'disc') & (scenario_df['frame'] != scenario_df['frame'].max()), 'x'] = None
+            scenario_df.loc[(scenario_df['class'] == 'disc') & (scenario_df['frame'] != scenario_df['frame'].max()), 'y'] = None
+
+            # Get the frame where the holder has the disc
+            holder_frame = scenario_df[scenario_df['holder'] == True]['frame'].unique()
+
+            # Set the disc position to the holder's position
+            for frame in holder_frame:
+                scenario_df.loc[(scenario_df['class'] == 'disc') & (scenario_df['frame'] == frame), 'x'] = scenario_df.loc[(scenario_df['holder'] == True) & (scenario_df['frame'] == frame), 'x'].values[0]
+                scenario_df.loc[(scenario_df['class'] == 'disc') & (scenario_df['frame'] == frame), 'y'] = scenario_df.loc[(scenario_df['holder'] == True) & (scenario_df['frame'] == frame), 'y'].values[0]
+
+            # Interpolate the missing disc position
+            scenario_df.loc[scenario_df['class'] == 'disc', ['x', 'y']] = scenario_df.loc[scenario_df['class'] == 'disc', ['x', 'y']].interpolate(method='linear', limit_direction='both').round(2)
+
+            self.scenarios[shift] = scenario_df
 
 def main():
     # Example usage
@@ -321,8 +438,8 @@ def main():
     vtcs = VTCS(ultimate_track_df)
 
     vtcs.detect_candidates()
-    for candidate_id, candidate_df in vtcs.candidates.items():
-        vis.plot_play(candidate_df, save_path=f"output/{candidate_id}")
+    # for candidate_id, candidate_df in vtcs.candidates.items():
+    #     vis.plot_play(candidate_df, save_path=f"output/{candidate_id}")
 
     if vtcs.candidates:
         # select a candidate
@@ -339,6 +456,8 @@ def main():
                 print("Invalid candidate index. Please try again.")
 
         vtcs.generate_scenarios()
+        for shift, scenario_df in vtcs.scenarios.items():
+            vis.plot_play(scenario_df, save_path=f"output/scenario/{shift}.mp4")
 
         evaluation_results = vtcs.evaluate()
 
