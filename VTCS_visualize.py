@@ -1,10 +1,29 @@
-import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import matplotlib.pyplot as plt
 import numpy as np
 
 
 def plot_pitch(field_dimen=(47.0, 18.5), linewidth=2):
-    """Draw a simple ultimate field."""
+    """Draw a simple ultimate frisbee field.
+
+    Creates a matplotlib figure with an ultimate frisbee field layout including
+    goal lines and field boundaries.
+
+    Args:
+        field_dimen (tuple, optional): Field dimensions as (length, width) in meters.
+            Defaults to (47.0, 18.5) which represents a standard ultimate field.
+        linewidth (int, optional): Width of the field lines in points. Defaults to 2.
+
+    Returns:
+        tuple: A tuple containing:
+            - fig (matplotlib.figure.Figure): The figure object
+            - ax (matplotlib.axes.Axes): The axes object with the field drawn
+
+    Note:
+        The field is drawn with goal lines at ±14.5 meters from center and
+        end lines at the field boundaries. The coordinate system is centered
+        at (0, 0) with the field extending symmetrically in all directions.
+    """
     fig, ax = plt.subplots(figsize=(12, 6))
     border_dimen = (3, 3)
     half_pitch_length = field_dimen[0] / 2.0
@@ -35,21 +54,36 @@ def plot_pitch(field_dimen=(47.0, 18.5), linewidth=2):
 
 
 def plot_play(play_data, save_path, fps=15, field_dimen=(47.0, 18.5)):
-    """Create a simple animation for a play.
+    """Create an animated visualization of ultimate frisbee play data.
 
-    Parameters
-    ----------
-    play_data : pandas.DataFrame
-        Frame by frame tracking data. Expected columns include
-        ``frame``, ``id``, ``class``, ``x``, ``y``, ``vx``, ``vy`` and
-        ``holder``.
-    save_path : str
-        Output mp4 file path. The extension ``.mp4`` will be appended if
-        not provided.
-    fps : int, optional
-        Frames per second of the output video.
-    field_dimen : tuple of float, optional
-        (length, width) of the field in meters.
+    This function generates an MP4 video showing the movement of players and disc
+    on an ultimate frisbee field. Players are represented as colored dots with
+    velocity vectors, and their positions are animated over time.
+
+    Args:
+        play_data (pd.DataFrame): DataFrame containing play data with columns:
+            - 'id': Player/disc ID
+            - 'frame': Frame number
+            - 'x', 'y': Position coordinates
+            - 'vx', 'vy': Velocity components
+            - 'class': Player type ('offense', 'defense', 'disc')
+            - 'selected': Boolean for offense player selection
+            - 'selected_def': Boolean for defense player selection
+        save_path (str): Output path for the MP4 file. '.mp4' extension will be
+            added automatically if not present.
+        fps (int, optional): Frames per second for the output video. Defaults to 15.
+        field_dimen (tuple, optional): Field dimensions as (length, width) in meters.
+            Defaults to (47.0, 18.5).
+
+    Returns:
+        None: The function saves the animation to the specified file path.
+
+    Note:
+        - Offense players are shown in blue (selected) or dodgerblue (unselected)
+        - Defense players are shown in red (selected) or indianred (unselected)
+        - The disc is shown as a black dot
+        - Velocity vectors are displayed for all players except the disc
+        - Player IDs are displayed as text labels on each player
     """
     if not save_path.endswith('.mp4'):
         save_path += '.mp4'
