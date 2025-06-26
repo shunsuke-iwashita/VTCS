@@ -425,7 +425,7 @@ class VTCS:
                 (df_shifted["id"] == selected_id) & (df_shifted["frame"] >= new_t0), "y"
             ] += delta_y
 
-            # Get other feature
+            # Get vx_mean and vy_mean
             vx_mean = (
                 df_shifted[
                     (df_shifted["id"] == selected_id)
@@ -495,7 +495,112 @@ class VTCS:
         選択した候補DataFrameを後方にシフトする。
         """
         assert shift > 0
-        
+        df_shifted = self.selected.copy()
+        t0 = df_shifted[df_shifted["selected"]]["frame"].min()
+        t1 = df_shifted[df_shifted["selected"]]["frame"].max()
+        max_frame = df_shifted["frame"].max()
+        new_t0 = t0 + shift
+
+        if max_frame - t1 < shift:
+            return None
+
+        for class_type in ["offense", "defense"]:
+            column = "selected" if class_type == "offense" else "selected_def"
+
+            # Get the selected player id
+            selected_id = int(df_shifted[df_shifted[column]]["id"].values[0])
+
+            # Get vx_mean and vy_mean
+            vx_mean = (
+                df_shifted[
+                    (df_shifted["id"] == selected_id)
+                    & (df_shifted["frame"] < t0)
+                    & (df_shifted["frame"] >= t0 - shift)
+                ]["vx"]
+                .mean()
+                .round(2)
+            )
+            vy_mean = (
+                df_shifted[
+                    (df_shifted["id"] == selected_id)
+                    & (df_shifted["frame"] < t0)
+                    & (df_shifted["frame"] >= t0 - shift)
+                ]["vy"]
+                .mean()
+                .round(2)
+            )
+            v_angle = np.degrees(np.arctan2(vy_mean, vx_mean)).round(2)
+
+            # Get the delta_x and delta_y
+            delta_x = vx_mean / 15 * shift
+            delta_y = vy_mean / 15 * shift
+
+            # Remove duplicate frames by shifting the frame
+            df_shifted = df_shifted[
+                ~(
+                    (df_shifted["id"] == selected_id)
+                    & (df_shifted["frame"] > max_frame - shift)
+                )
+            ]
+
+            # Shift the frames
+            df_shifted.loc[
+                (df_shifted["id"] == selected_id) & (df_shifted["frame"] > t0), "frame"
+            ] += shift
+
+            # Correct the x and y positions
+            df_shifted.loc[
+                (df_shifted["id"] == selected_id) & (df_shifted["frame"] >= new_t0), "x"
+            ] += delta_x
+            df_shifted.loc[
+                (df_shifted["id"] == selected_id) & (df_shifted["frame"] >= new_t0), "y"
+            ] += delta_y
+
+            closest = df_shifted[df_shifted["id"] == selected_id]["closest"].values[0]
+
+            # Add missing frames by shifting the frame
+            columns = df_shifted.columns
+            for i in range(1, shift + 1):
+                x = (
+                    df_shifted[
+                        (df_shifted["id"] == selected_id)
+                        & (df_shifted["frame"] == t0)
+                    ]["x"].values[0]
+                    - vx_mean / 15 * i
+                ).round(2)
+                y = (
+                    df_shifted[
+                        (df_shifted["id"] == selected_id)
+                        & (df_shifted["frame"] == t0)
+                    ]["y"].values[0]
+                    - vy_mean / 15 * i
+                ).round(2)
+
+                df_add = pd.DataFrame(
+                    [
+                        [
+                            selected_id,
+                            t0 + i,
+                            class_type,
+                            x,
+                            y,
+                            vx_mean,
+                            vy_mean,
+                            closest,
+                            False,
+                            v_angle,
+                            False,
+                            False,
+                        ]
+                    ],
+                    columns=columns,
+                )
+
+                df_shifted = pd.concat([df_shifted, df_add])
+
+            df_shifted = df_shifted.sort_values(["frame", "id"]).reset_index(drop=True)
+
+        return df_shifted
 
     def adjust_disc_positions(self):
         """
@@ -613,4 +718,5 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
     main()
