@@ -1,14 +1,32 @@
 import itertools
+import os
 import sys
 
 import numpy as np
 import pandas as pd
 
-import VTCS_visualize as vis
-
 
 class VTCS:
+    """Vision-based Tactical Counterfactual Scenarios (VTCS) analysis system.
+
+    A class for analyzing ultimate frisbee player movements and generating
+    counterfactual scenarios to evaluate timing decisions.
+    """
+
     def __init__(self, ultimate_track_df):
+        """Initialize VTCS with ultimate frisbee tracking data.
+
+        Args:
+            ultimate_track_df (pd.DataFrame): DataFrame containing tracking data with columns:
+                - 'id': Player/disc ID
+                - 'frame': Frame number
+                - 'x', 'y': Position coordinates
+                - 'vx', 'vy': Velocity components
+                - 'ax', 'ay': Acceleration components
+                - 'class': Player type ('offense', 'defense', 'disc')
+                - 'holder': Boolean indicating if player holds the disc
+                - 'closest': ID of closest opposing player
+        """
         self.play = ultimate_track_df
         self.candidates = {}  # dict: {id: DataFrame}
         self.selected = None  # DataFrame
@@ -40,6 +58,12 @@ class VTCS:
 
     def detect_candidates(self):
         """Detect movement candidates from the play DataFrame.
+
+        This method performs a three-step process to identify potential movement
+        candidates:
+        1. Detect movement initiation based on acceleration and velocity criteria
+        2. Deselect movements based on proximity and direction constraints
+        3. Extract candidate DataFrames with temporal windows
         """
         # Detect movement initiation from the play DataFrame.
         self.detect_movement_initiation()  # 例: play DataFrameを更新する関数
@@ -47,8 +71,19 @@ class VTCS:
         self.extract_movement_candidates()  # 例: [df1, df2, ...]
 
     def generate_scenarios(self, shifts=range(-15, 16)):
-        """
-        選択した候補DataFrame(self.selected)から各シフトの反実仮想シナリオを生成し、dictで格納。
+        """Generate counterfactual scenarios by shifting selected movement timing.
+
+        Creates alternative scenarios by temporally shifting the selected movement
+        either forward (negative shifts) or backward (positive shifts) in time.
+
+        Args:
+            shifts (range, optional): Range of temporal shifts to apply in frames.
+                Negative values shift movement earlier, positive values shift later.
+                Defaults to range(-15, 16) for ±15 frame shifts.
+
+        Note:
+            After generating all scenarios, disc positions are automatically
+            adjusted to maintain consistency with ball possession.
         """
         for shift in shifts:
             if shift == 0:
@@ -65,18 +100,44 @@ class VTCS:
 
         self.adjust_disc_positions()
 
-    def evaluate(self):
-        """
-        各シナリオDataFrameごとにV_frame, V_scenarioを計算し、V_timingも算出。
+    def evaluate(self, file_name: str, candidate_id: str):
+        """Evaluate all generated scenarios using frame-wise and scenario-wise metrics.
+
+        Calculates evaluation metrics for each scenario including V_frame (frame-wise
+        values), V_scenario (scenario summary), and V_timing (timing effectiveness).
+
+        Args:
+            file_name (str): Name of the input file used for evaluation, primarily
+                for logging and result identification.
+            candidate_id (str): Identifier for the selected candidate movement.
+
+        Returns:
+            dict: Dictionary containing evaluation results with keys:
+                - 'v_frame': Dict mapping shift -> list of frame-wise values
+                - 'v_scenario': Dict mapping shift -> scenario summary value
+                - 'v_timing': Float representing timing effectiveness
+                - 'best_timing': Int representing the optimal shift value
+
+        Note:
+            V_timing is calculated as the difference between actual (shift=0)
+            and best possible scenario performance.
+
+        TODO:
+            - Implement calc_wuppcf method to compute wUPPCF values dynamically
         """
         self.v_frame = {}
         self.v_scenario = {}
 
         for shift, scenario_df in self.scenarios.items():
-            v_frame_list = calc_v_frame_series(scenario_df)  # 例: [float, ...]を返す
-            v_scenario_val = calc_v_scenario_from_v_frame(
-                v_frame_list
-            )  # 例: floatを返す
+            wuppcf_file = f"data/input/player_wUPPCF/{file_name}-{candidate_id.replace('-', '_')}_{shift}.npy"
+            if not os.path.exists(wuppcf_file):
+                continue
+            wuppcf = np.load(wuppcf_file)
+            # wuppcf = self.calc_wuppcf(scenario_df)
+            v_frame_list = self.get_v_frame_series(
+                scenario_df, wuppcf
+            )  # 例: [float, ...]を返す
+            v_scenario_val = self.calc_v_scenario(v_frame_list)  # 例: floatを返す
 
             self.v_frame[shift] = v_frame_list
             self.v_scenario[shift] = v_scenario_val
@@ -84,6 +145,7 @@ class VTCS:
         # V_timing計算
         v_actual = self.v_scenario.get(0, None)
         v_best = max([v for k, v in self.v_scenario.items() if k != 0])
+        best_shift = max(self.v_scenario, key=self.v_scenario.get)
         self.v_timing = (
             v_actual - v_best if v_actual is not None and v_best is not None else None
         )
@@ -92,11 +154,27 @@ class VTCS:
             "v_frame": self.v_frame,  # {shift: [v1, v2, ...]}
             "v_scenario": self.v_scenario,  # {shift: value}
             "v_timing": self.v_timing,  # float
+            "best_timing": best_shift,  # 最適なシフト
         }
 
-    def detect_movement_initiation(self, v_threshold: float=3.0, a_threshold: float=4.0):
-        """
-        動き出しの検出を行い、play DataFrameを更新。
+    def detect_movement_initiation(
+        self, v_threshold: float = 3.0, a_threshold: float = 4.0
+    ):
+        """Detect movement initiation and perform temporal expansion.
+
+        Identifies when offensive players begin significant movements based on
+        acceleration and velocity criteria, then expands the detection both
+        forward and backward in time to capture complete movement sequences.
+
+        Args:
+            v_threshold (float, optional): Minimum velocity threshold for movement
+                detection in m/s. Defaults to 3.0.
+            a_threshold (float, optional): Minimum acceleration threshold for movement
+                initiation in m/s². Defaults to 4.0.
+
+        Note:
+            This method modifies self.play by adding a 'selected' column and
+            removes temporary calculation columns after processing.
         """
         # ---------- detect movement initiation ----------
         self.play["selected"] = False
@@ -231,7 +309,22 @@ class VTCS:
         )
 
     def deselect_movement_initiation(self):
-        """Deselect candidates based on proximity and running direction."""
+        """Deselect movement candidates based on proximity and running direction.
+
+        Filters out movement candidates that occur in crowded areas or when
+        multiple players are moving in the same direction, as these are likely
+        less significant individual movements.
+
+        The deselection criteria include:
+            - Distance threshold of 5.0 meters for determining crowded conditions
+            - Player threshold of 2 or more nearby players
+            - Forward direction cone of 45 degrees for detecting similar movements
+
+        Note:
+            Uses distance threshold of 5.0 meters and player threshold of 2 to
+            determine crowded conditions. Also checks for players moving within
+            45-degree forward direction cone.
+        """
 
         def is_within_forward_direction(target_direction, dx, dy):
             angle = np.degrees(np.arctan2(dy, dx))
@@ -294,9 +387,29 @@ class VTCS:
         self.play["v_angle"] = self.play["v_angle"].round(2)
 
     def extract_movement_candidates(self, window=30):
-        """
-        全選手分のデータを、selected==Trueの連続区間ごとに
-        「その区間＋前後windowフレーム」を含めて抽出し、リストで返す。
+        """Extract movement candidates with temporal windows.
+
+        Extracts continuous sequences of selected movements for each player,
+        adding temporal context windows before and after each movement sequence.
+
+        Args:
+            window (int, optional): Number of frames to include before and after
+                each movement sequence for context. Defaults to 30.
+
+        The extraction process:
+            1. Groups selected movements by player ID
+            2. Identifies continuous frame sequences for each player
+            3. Adds temporal context windows around each sequence
+            4. Creates candidate DataFrames with movement metadata
+            5. Marks closest defenders during movement periods
+
+        Note:
+            Creates candidate DataFrames with attributes:
+            - movement_player_id: ID of the moving player
+            - movement_start_frame: First frame of movement
+            - movement_end_frame: Last frame of movement
+
+            Also sets selected_def=True for the closest defender during movement.
         """
         play = self.play
 
@@ -340,34 +453,27 @@ class VTCS:
                         candidate_df.loc[idx, "selected_def"] = True
                 self.candidates[f"{player_id}-{i+1}"] = candidate_df
 
-    # def fill_holder(self):
-    #     """
-    #     選択した候補DataFrameのholder列をTrueに設定する。
-    #     """
-    #     # frameごとのholder=Trueを管理
-    #     holder_id = None
-    #     for frame, group in self.selected.groupby("frame"):
-    #         holders = group[group["holder"]]
-    #         if len(holders) == 1:
-    #             # ちょうど1つ → そのidを記憶
-    #             holder_id = holders["id"].iloc[0]
-    #         elif len(holders) == 0:
-    #             # 0なら直近のholder_idを使う
-    #             if holder_id is not None:
-    #                 mask = (self.selected["frame"] == frame) & (
-    #                     self.selected["id"] == holder_id
-    #                 )
-    #                 self.selected.loc[mask, "holder"] = True
-    #                 mask_ = (self.selected["frame"] == frame) & (
-    #                     self.selected["class"] == "disc"
-    #                 )
-    #                 self.selected.loc[mask_, ["x", "y"]] = self.selected.loc[
-    #                     mask, ["x", "y"]
-    #                 ].values
-
     def shift_forward(self, shift):
-        """
-        選択した候補DataFrameを前方にシフトする。
+        """Shift selected candidate DataFrame forward in time.
+
+        Moves the selected movement sequence earlier in time by removing frames
+        from the beginning and extrapolating new frames at the end based on
+        average velocity patterns.
+
+        Args:
+            shift (int): Number of frames to shift forward (must be negative).
+                Negative values move the movement earlier in time.
+
+        Returns:
+            pd.DataFrame or None: Modified DataFrame with shifted movement, or None
+                if insufficient data exists for the requested shift.
+
+        Raises:
+            AssertionError: If shift is not negative (shift >= 0).
+
+        Note:
+            Processes both offense and defense players, adjusting positions and
+            maintaining velocity consistency through extrapolation.
         """
         assert shift < 0
         df_shifted = self.selected.copy()
@@ -491,8 +597,26 @@ class VTCS:
         return df_shifted
 
     def shift_backward(self, shift):
-        """
-        選択した候補DataFrameを後方にシフトする。
+        """Shift selected candidate DataFrame backward in time.
+
+        Moves the selected movement sequence later in time by extrapolating
+        new frames at the beginning based on velocity patterns and removing
+        frames from the end.
+
+        Args:
+            shift (int): Number of frames to shift backward (must be positive).
+                Positive values move the movement later in time.
+
+        Returns:
+            pd.DataFrame or None: Modified DataFrame with shifted movement, or None
+                if insufficient data exists for the requested shift.
+
+        Raises:
+            AssertionError: If shift is not positive (shift <= 0).
+
+        Note:
+            Uses historical velocity data to extrapolate realistic movement
+            patterns for the pre-movement period.
         """
         assert shift > 0
         df_shifted = self.selected.copy()
@@ -545,7 +669,7 @@ class VTCS:
 
             # Shift the frames
             df_shifted.loc[
-                (df_shifted["id"] == selected_id) & (df_shifted["frame"] > t0), "frame"
+                (df_shifted["id"] == selected_id) & (df_shifted["frame"] >= t0), "frame"
             ] += shift
 
             # Correct the x and y positions
@@ -564,23 +688,23 @@ class VTCS:
                 x = (
                     df_shifted[
                         (df_shifted["id"] == selected_id)
-                        & (df_shifted["frame"] == t0)
+                        & (df_shifted["frame"] == t0 - 1)
                     ]["x"].values[0]
-                    - vx_mean / 15 * i
+                    + vx_mean / 15 * i
                 ).round(2)
                 y = (
                     df_shifted[
                         (df_shifted["id"] == selected_id)
-                        & (df_shifted["frame"] == t0)
+                        & (df_shifted["frame"] == t0 - 1)
                     ]["y"].values[0]
-                    - vy_mean / 15 * i
+                    + vy_mean / 15 * i
                 ).round(2)
 
                 df_add = pd.DataFrame(
                     [
                         [
                             selected_id,
-                            t0 + i,
+                            t0 - 1 + i,
                             class_type,
                             x,
                             y,
@@ -603,8 +727,22 @@ class VTCS:
         return df_shifted
 
     def adjust_disc_positions(self):
-        """
-        選択した候補DataFrameのディスク位置を調整する。
+        """Adjust disc positions in all scenarios to maintain consistency.
+
+        Ensures that disc positions are correctly aligned with ball possession
+        throughout all generated scenarios. Interpolates disc movement between
+        known holder positions and handles possession transitions.
+
+        The method performs the following operations:
+            1. Identifies the current disc holder in each frame
+            2. Resolves conflicts when multiple players appear to hold the disc
+            3. Sets disc position to match the holder's position
+            4. Interpolates disc positions for frames without clear possession
+
+        Note:
+            Modifies all scenario DataFrames in self.scenarios in-place to ensure disc
+            positions follow the holder and are smoothly interpolated between
+            possession changes.
         """
         for shift, scenario_df in self.scenarios.items():
             scenario_df = scenario_df.sort_values(
@@ -679,10 +817,148 @@ class VTCS:
 
             self.scenarios[shift] = scenario_df
 
+    # def calc_wuppcf(self, scenario_df):
+    #     pass
+
+    def get_v_frame_series(
+        self,
+        scenario_df,
+        wuppcf,
+        xgrid=np.arange(1, 94, 2),
+        ygrid=np.arange(37 / 19 / 2, 37, 37 / 19),
+    ):
+        """Calculate V_frame series for all frames in the scenario.
+
+        Args:
+            scenario_df (pd.DataFrame): Scenario data with player positions and movements.
+            wuppcf (np.ndarray): Pre-computed wUPPCF values for evaluation.
+            xgrid (np.ndarray, optional): X-coordinate grid for field discretization.
+                Defaults to np.arange(1, 94, 2).
+            ygrid (np.ndarray, optional): Y-coordinate grid for field discretization.
+                Defaults to np.arange(37/19/2, 37, 37/19).
+
+        Returns:
+            list: List of V_frame values for each frame in the scenario.
+        """
+        unique_frames = sorted(scenario_df["frame"].unique())
+        v_frame_list = []
+        for frame in unique_frames:
+            frame_df = scenario_df[scenario_df["frame"] == frame]
+            off_df = (
+                frame_df[(frame_df["class"] == "offense") & (~frame_df["holder"])]
+                .sort_values(by="id")
+                .reset_index(drop=True)
+            )
+            disc_pos = frame_df[frame_df["class"] == "disc"][["x", "y"]].values[0]
+            off_ids = off_df["id"].values
+            selected_id = frame_df[frame_df["selected"]]["id"].values
+            if selected_id.size == 0:
+                continue
+            selected_index = np.where(off_ids == selected_id[0])[0][0]
+            v_frame = self.calc_v_frame(
+                wuppcf[selected_index, frame - min(unique_frames) - 1, :, :],
+                off_df.iloc[selected_index][["x", "y", "vx", "vy"]],
+                xgrid,
+                ygrid,
+                disc_pos,
+                disc_speed=10,
+            )
+            v_frame_list.append(v_frame)
+
+        return v_frame_list
+
+    def calc_v_frame(self, wuppcf, off_row, xgrid, ygrid, disc_pos, disc_speed=10):
+        """Calculate V_frame value for a single offensive player.
+
+        Computes the value of a frame based on the weighted ultimate probabilistic
+        player control field (wUPPCF) and player positioning relative to the disc.
+
+        Args:
+            wuppcf (np.ndarray): 2D array of pre-computed wUPPCF values.
+            off_row (pd.Series): Series containing player data with keys:
+                - x, y: Current position coordinates
+                - vx, vy: Current velocity components
+            xgrid (np.ndarray): X-coordinate grid for field discretization.
+            ygrid (np.ndarray): Y-coordinate grid for field discretization.
+            disc_pos (tuple): Current disc position as (x, y) coordinates.
+            disc_speed (float, optional): Speed of disc movement in m/s. Defaults to 10.
+
+        Returns:
+            float: V_frame value representing the strategic value of the position.
+        """
+        x_p, y_p, vx, vy = off_row
+        x_d, y_d = disc_pos
+
+        A = vx**2 + vy**2 - disc_speed**2
+        B = 2 * (vx * (x_p - x_d) + vy * (y_p - y_d))
+        C = (x_p - x_d) ** 2 + (y_p - y_d) ** 2
+
+        D = B**2 - 4 * A * C
+
+        t1 = (-B + np.sqrt(D)) / (2 * A)
+        t2 = (-B - np.sqrt(D)) / (2 * A)
+        t = max(t1, t2)
+
+        x_t = x_p + vx * t
+        y_t = y_p + vy * t
+
+        radius = np.sqrt((vx * t * 0.5) ** 2 + (vy * t * 0.5) ** 2)
+
+        # Create a 2D grid of coordinates
+        X, Y = np.meshgrid(xgrid, ygrid)
+
+        # Create a mask for points within the radius
+        mask = (X - x_t) ** 2 + (Y - y_t) ** 2 <= radius**2
+
+        # Check if the mask results in any valid points
+        if not np.any(mask):
+            return 0.0
+
+        v_frame = np.mean(np.flipud(wuppcf)[mask]).round(3)
+
+        return v_frame
+
+    def calc_v_scenario(self, v_frame_list):
+        """Calculate V_scenario value from a list of V_frame values.
+
+        Computes the scenario-level value by applying a moving average filter
+        and taking the maximum value, representing the peak strategic opportunity.
+
+        Args:
+            v_frame_list (list): List of V_frame values for each frame in the scenario.
+
+        Returns:
+            float: V_scenario value representing the maximum strategic value
+                achieved during the scenario.
+        """
+        v_scenario = (
+            np.convolve(v_frame_list, np.ones(15) / 15, mode="same").max().round(3)
+        )
+        return v_scenario
+
 
 def main():
+    """Main function to demonstrate VTCS analysis workflow.
+
+    Loads ultimate frisbee tracking data, detects movement candidates,
+    allows user selection of a candidate, generates counterfactual scenarios,
+    and creates visualizations for analysis.
+
+    The workflow includes:
+        1. Load tracking data from CSV
+        2. Detect movement candidates
+        3. Interactive candidate selection
+        4. Generate temporal shift scenarios
+        5. Create visualization videos
+        6. Evaluate scenario performance
+
+    Example:
+        Run the script directly to start the interactive analysis:
+            $ python VTCS.py
+    """
     # Example usage
-    ultimate_track_df = pd.read_csv("data/input/UltimateTrack/1_1_2.csv")
+    file_name = "data/input/UltimateTrack/1_1_2.csv"
+    ultimate_track_df = pd.read_csv(file_name)
     vtcs = VTCS(ultimate_track_df)
 
     vtcs.detect_candidates()
@@ -692,6 +968,7 @@ def main():
     if vtcs.candidates:
         # select a candidate
         while True:
+            print("Available candidates:" f" {', '.join(vtcs.candidates.keys())}")
             candidate_index = input("Enter candidate index to select (e.g., '1-1'): ")
             if candidate_index == "q":
                 print("Exiting.")
@@ -711,12 +988,19 @@ def main():
                 print("Invalid candidate index. Please try again.")
 
         vtcs.generate_scenarios()
-        for shift, scenario_df in vtcs.scenarios.items():
-            vis.plot_play(scenario_df, save_path=f"output/scenario/{shift}.mp4")
+        # for shift, scenario_df in tqdm(vtcs.scenarios.items()):
+        #     vis.plot_play(scenario_df, save_path=f"output/scenario/{shift}.mp4")
 
-        evaluation_results = vtcs.evaluate()
+        evaluation_results = vtcs.evaluate(
+            file_name.split("/")[-1].split(".")[0], candidate_index
+        )
+
+        print("Evaluation Results:")
+        print("V_frame:", evaluation_results["v_frame"])
+        print("V_scenario:", evaluation_results["v_scenario"])
+        print("V_timing:", evaluation_results["v_timing"])
+        print("Best timing shift:", evaluation_results["best_timing"])
 
 
 if __name__ == "__main__":
-    main()
     main()
