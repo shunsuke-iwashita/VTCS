@@ -5,13 +5,23 @@ import pandas as pd
 
 
 class ScenarioGenerator:
-    """Generates counterfactual scenarios by shifting movement timing."""
+    """Generates counterfactual scenarios by shifting movement timing.
+
+    This class creates alternative timeline scenarios by temporally shifting
+    a selected player movement either earlier or later in time, allowing
+    for analysis of timing effects on game outcomes.
+
+    Attributes:
+        selected (pd.DataFrame): The selected movement candidate DataFrame.
+        scenarios (Dict[int, pd.DataFrame]): Generated scenarios indexed by shift value.
+    """
 
     def __init__(self, selected_df):
         """Initialize with selected candidate DataFrame.
 
         Args:
             selected_df (pd.DataFrame): Selected movement candidate DataFrame
+                containing player tracking data with movement annotations.
         """
         self.selected = selected_df
         self.scenarios = {}
@@ -19,11 +29,23 @@ class ScenarioGenerator:
     def generate_scenarios(self, shifts=range(-15, 16)):
         """Generate scenarios with temporal shifts.
 
+        Creates multiple alternative scenarios by shifting the selected movement
+        timing by different amounts, both forward and backward in time.
+
         Args:
-            shifts (range): Range of temporal shifts to apply
+            shifts (range): Range of temporal shifts to apply in frames.
+                Negative values shift movement earlier, positive values later.
+                Defaults to range(-15, 16) for ±15 frame shifts.
 
         Returns:
-            dict: Dictionary of scenario DataFrames
+            Dict[int, pd.DataFrame]: Dictionary of scenario DataFrames indexed
+                by shift amount.
+
+        Note:
+            - Shift=0 represents the original unmodified scenario
+            - Negative shifts move movement earlier in time
+            - Positive shifts move movement later in time
+            - Disc positions are automatically adjusted after generation
         """
         for shift in shifts:
             if shift == 0:
@@ -102,7 +124,6 @@ class ScenarioGenerator:
         t0 = df_shifted[df_shifted["selected"]]["frame"].min()
         t1 = df_shifted[df_shifted["selected"]]["frame"].max()
         max_frame = df_shifted["frame"].max()
-        new_t0 = t0 + shift
 
         # Check if shift is possible
         if max_frame - t1 < shift:

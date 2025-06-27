@@ -6,10 +6,19 @@ import numpy as np
 
 
 class VTCSEvaluator:
-    """Evaluates VTCS scenarios using frame-wise and scenario-wise metrics."""
+    """Evaluates VTCS scenarios using frame-wise and scenario-wise metrics.
+
+    This class computes strategic value metrics for different timing scenarios
+    using weighted Ultimate Probabilistic Player Control Fields (wUPPCF).
+
+    Attributes:
+        v_frame (Dict[int, List[float]]): Frame-wise values for each scenario.
+        v_scenario (Dict[int, float]): Scenario-level values for each shift.
+        v_timing (float): Timing effectiveness metric.
+    """
 
     def __init__(self):
-        """Initialize evaluator."""
+        """Initialize evaluator with empty metric storage."""
         self.v_frame = {}
         self.v_scenario = {}
         self.v_timing = None
@@ -17,13 +26,25 @@ class VTCSEvaluator:
     def evaluate_scenarios(self, scenarios, file_name, candidate_id):
         """Evaluate all scenarios and calculate metrics.
 
+        Computes frame-wise and scenario-wise strategic value metrics for
+        each generated scenario using pre-computed wUPPCF data.
+
         Args:
-            scenarios (dict): Dictionary of scenario DataFrames
-            file_name (str): Input file name for wUPPCF lookup
-            candidate_id (str): Candidate identifier
+            scenarios (Dict[int, pd.DataFrame]): Dictionary of scenario DataFrames
+                indexed by shift amount.
+            file_name (str): Input file name for wUPPCF file lookup.
+            candidate_id (str): Candidate identifier for file naming.
 
         Returns:
-            dict: Evaluation results
+            Dict[str, Any]: Evaluation results containing:
+                - v_frame: Frame-wise values for each scenario
+                - v_scenario: Scenario-level summary values
+                - v_timing: Timing effectiveness metric
+                - best_timing: Optimal shift value
+
+        Note:
+            Requires pre-computed wUPPCF files in data/input/player_wUPPCF/
+            directory with naming pattern: {file_name}-{candidate_id}_{shift}.npy
         """
         self.v_frame = {}
         self.v_scenario = {}
@@ -202,9 +223,14 @@ class VTCSEvaluator:
 
     def _create_results_dict(self):
         """Create results dictionary with all evaluation metrics."""
-        best_shift = (
-            max(self.v_scenario, key=self.v_scenario.get) if self.v_scenario else None
-        )
+        best_shift = None
+        if self.v_scenario:
+            # Find the key with the maximum value
+            max_value = max(self.v_scenario.values())
+            for key, value in self.v_scenario.items():
+                if value == max_value:
+                    best_shift = key
+                    break
 
         return {
             "v_frame": self.v_frame,

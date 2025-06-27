@@ -13,6 +13,15 @@ class VTCS:
 
     A class for analyzing ultimate frisbee player movements and generating
     counterfactual scenarios to evaluate timing decisions.
+
+    Attributes:
+        play (pd.DataFrame): Processed tracking data with derived columns.
+        movement_detector (MovementDetector): Component for detecting player movements.
+        scenario_generator (ScenarioGenerator): Component for generating scenarios.
+        evaluator (VTCSEvaluator): Component for evaluating scenarios.
+        candidates (Dict[str, pd.DataFrame]): Dictionary of detected movement candidates.
+        selected (pd.DataFrame): Currently selected candidate for analysis.
+        scenarios (Dict[int, pd.DataFrame]): Generated scenarios with different time shifts.
     """
 
     def __init__(self, ultimate_track_df):
@@ -47,9 +56,17 @@ class VTCS:
 
         This method performs a three-step process to identify potential movement
         candidates:
+
         1. Detect movement initiation based on acceleration and velocity criteria
         2. Deselect movements based on proximity and direction constraints
         3. Extract candidate DataFrames with temporal windows
+
+        The method updates the internal candidates dictionary with detected movements.
+        Each candidate is identified by a unique key in the format "{player_id}-{sequence_number}".
+
+        Note:
+            This method modifies the internal state of the VTCS object by populating
+            the candidates dictionary.
         """
         # Update play data with detection results
         self.movement_detector.detect_movement_initiation()
@@ -73,6 +90,9 @@ class VTCS:
                 Negative values shift movement earlier, positive values shift later.
                 Defaults to range(-15, 16) for ±15 frame shifts.
 
+        Raises:
+            ValueError: If no candidate has been selected for analysis.
+
         Note:
             After generating all scenarios, disc positions are automatically
             adjusted to maintain consistency with ball possession.
@@ -87,7 +107,12 @@ class VTCS:
         """Select a candidate for scenario generation.
 
         Args:
-            candidate_id (str): ID of the candidate to select
+            candidate_id (str): ID of the candidate to select. Must exist in the
+                candidates dictionary.
+
+        Raises:
+            ValueError: If the specified candidate_id is not found in the candidates
+                dictionary.
         """
         if candidate_id not in self.candidates:
             raise ValueError(f"Candidate {candidate_id} not found.")
@@ -106,15 +131,19 @@ class VTCS:
             candidate_id (str): Identifier for the selected candidate movement.
 
         Returns:
-            dict: Dictionary containing evaluation results with keys:
+            Dict[str, Any]: Dictionary containing evaluation results with keys:
                 - 'v_frame': Dict mapping shift -> list of frame-wise values
                 - 'v_scenario': Dict mapping shift -> scenario summary value
                 - 'v_timing': Float representing timing effectiveness
                 - 'best_timing': Int representing the optimal shift value
 
+        Raises:
+            ValueError: If no scenarios have been generated prior to evaluation.
+
         Note:
             V_timing is calculated as the difference between actual (shift=0)
-            and best possible scenario performance.
+            and best possible scenario performance. Requires pre-computed wUPPCF
+            files to be available in the data/input/player_wUPPCF/ directory.
         """
         if not self.scenarios:
             raise ValueError("No scenarios generated. Call generate_scenarios() first.")
@@ -140,8 +169,13 @@ def main():
         6. Evaluate scenario performance
 
     Example:
-        Run the script directly to start the interactive analysis:
+        Run the script directly to start the interactive analysis::
+
             $ python VTCS.py
+
+    Note:
+        Requires input data file at 'data/input/UltimateTrack/1_1_2.csv'.
+        Evaluation requires corresponding wUPPCF files in 'data/input/player_wUPPCF/'.
     """
     pd.set_option("display.max_rows", None)
     # Load data and initialize VTCS

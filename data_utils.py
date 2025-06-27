@@ -7,11 +7,26 @@ import pandas as pd
 def add_derived_columns(df):
     """Add derived columns to the tracking DataFrame.
 
+    Calculates velocity magnitudes, acceleration magnitudes, velocity angles,
+    acceleration angles, and velocity angle differences for movement analysis.
+
     Args:
-        df (pd.DataFrame): Input tracking DataFrame
+        df (pd.DataFrame): Input tracking DataFrame containing columns:
+            - vx, vy: Velocity components
+            - ax, ay: Acceleration components
+            - id: Player/object identifier
 
     Returns:
-        pd.DataFrame: DataFrame with added derived columns
+        pd.DataFrame: DataFrame with added derived columns:
+            - v_mag: Velocity magnitude (m/s)
+            - a_mag: Acceleration magnitude (m/s²)
+            - v_angle: Velocity angle in degrees
+            - a_angle: Acceleration angle in degrees
+            - diff_v_angle: Absolute velocity angle difference between frames
+
+    Note:
+        Velocity angle differences are calculated per player/object ID and
+        handle wraparound at 360°/0° boundary.
     """
     df = df.copy()
 
@@ -37,11 +52,18 @@ def add_derived_columns(df):
 def circular_average(angles):
     """Calculate circular average of angles.
 
+    Computes the circular mean of a set of angles, properly handling
+    the wraparound at 360°/0° boundary.
+
     Args:
-        angles (array-like): Array of angles in degrees
+        angles (array-like): Array of angles in degrees.
 
     Returns:
-        float: Circular average angle in degrees
+        float: Circular average angle in degrees, normalized to [0, 360).
+
+    Note:
+        Uses trigonometric approach by converting to unit vectors,
+        averaging, and converting back to angle representation.
     """
     radians = np.deg2rad(angles)
     sin_average = np.mean(np.sin(radians))
@@ -54,13 +76,21 @@ def circular_average(angles):
 def is_within_forward_direction(target_direction, dx, dy):
     """Check if direction is within forward cone.
 
+    Determines if a displacement vector (dx, dy) falls within a 45-degree
+    forward cone centered on the target direction.
+
     Args:
-        target_direction (float): Target direction in degrees
-        dx (float or array): X displacement
-        dy (float or array): Y displacement
+        target_direction (float): Target direction in degrees.
+        dx (float or np.ndarray): X displacement(s).
+        dy (float or np.ndarray): Y displacement(s).
 
     Returns:
-        bool or array: Whether direction is within forward cone
+        bool or np.ndarray: Whether direction is within forward cone.
+            Returns boolean array if dx/dy are arrays.
+
+    Note:
+        Forward cone spans ±22.5 degrees from target direction.
+        Uses relative angle calculation to handle wraparound.
     """
     angle = np.degrees(np.arctan2(dy, dx))
     relative_angle = (angle - target_direction + 360) % 360
@@ -72,11 +102,22 @@ def is_within_forward_direction(target_direction, dx, dy):
 def update_selected_and_length(group):
     """Update selected status based on sequence length.
 
+    Filters out movement sequences that are too short (< 15 frames) or
+    too long (> 75 frames) by analyzing continuous selected sequences.
+
     Args:
-        group (pd.DataFrame): Group DataFrame for a single player
+        group (pd.DataFrame): Group DataFrame for a single player containing
+            'selected' and 'frame' columns.
 
     Returns:
-        pd.DataFrame: Updated group with length column and filtered selection
+        pd.DataFrame: Updated group with added 'length' column and filtered
+            'selected' status based on sequence length criteria.
+
+    Note:
+        - Identifies continuous sequences of selected frames
+        - Calculates length for each sequence
+        - Sets selected=False for sequences outside [15, 75] frame range
+        - Requires consecutive frame numbers for valid sequences
     """
     group = group.sort_values("frame").reset_index(drop=True)
     selected = group["selected"].values
