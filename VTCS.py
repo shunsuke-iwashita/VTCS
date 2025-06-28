@@ -2,6 +2,7 @@ import sys
 
 import pandas as pd
 
+import VTCS_visualize as vv
 from data_utils import add_derived_columns
 from evaluator import VTCSEvaluator
 from movement_detector import MovementDetector
@@ -179,12 +180,14 @@ def main():
     """
     pd.set_option("display.max_rows", None)
     # Load data and initialize VTCS
-    file_name = "data/input/UltimateTrack/1_1_2.csv"
+    file_name = "data/input/UltimateTrack/1_2_1.csv"
     ultimate_track_df = pd.read_csv(file_name)
     vtcs = VTCS(ultimate_track_df)
 
     # Detect movement candidates
     vtcs.detect_candidates()
+    for candidate_id, candidate_df in vtcs.candidates.items():
+        vv.plot_play(candidate_df, f"output/{candidate_id}.mp4")
 
     if vtcs.candidates:
         # Interactive candidate selection
