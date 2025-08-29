@@ -200,8 +200,6 @@ class MovementDetector:
         self._expand_forward(v_threshold)
         self._filter_by_length()
         self._expand_backward()
-        print(self.play[self.play["selected"]].sort_values(["id", "frame"]))
-        print(self.play.columns)
         self._cleanup_columns()
 
     def _detect_initial_movements(self, v_threshold, a_threshold):
@@ -1417,7 +1415,6 @@ def main():
 
         # Display results
         print("\nEvaluation Results:")
-        print("V_frame:", evaluation_results["v_frame"])
         print("V_scenario:", evaluation_results["v_scenario"])
         print("V_timing:", evaluation_results["v_timing"])
         print("Best timing shift:", evaluation_results["best_timing"])
