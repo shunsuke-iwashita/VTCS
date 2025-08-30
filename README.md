@@ -172,7 +172,3 @@ The framework uses a modular architecture with clear separation of concerns:
 - Strategic evaluation using pre-computed wUPPCF data
 
 All modules follow comprehensive docstring standards and include type hints for better maintainability.
-
-## License
-
-This project is for research and educational purposes in sports analytics and ultimate frisbee tactical analysis.
