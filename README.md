@@ -8,6 +8,10 @@ This work was accepted at the **12th Workshop on Machine Learning and Data Minin
 
 - **Workshop**: [MLSA 2025 Schedule](https://dtai.cs.kuleuven.be/events/MLSA25/schedule.php)
 - **arXiv**: [https://arxiv.org/abs/2508.17611](https://arxiv.org/abs/2508.17611)
+- **Paper**:  
+  *Shunsuke Iwashita, Ning Ding, Keisuke Fujii.*  
+  **"Evaluating Movement Initiation Timing in Ultimate Frisbee via Temporal Counterfactuals."**  
+  *Proceedings of the 12th Workshop on Machine Learning and Data Mining for Sports Analytics (MLSA'25) co-located with the European Conference on Machine Learning and Principles and Practice of Knowledge Discovery (ECML-PKDD'25), 2025.*  
 
 ## Overview
 
